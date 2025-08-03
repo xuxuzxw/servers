@@ -9,6 +9,7 @@ import {
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import FlexSearch from 'flexsearch';
 
 // Define memory file path using environment variable with fallback
 const defaultMemoryPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'memory.json');
@@ -36,20 +37,44 @@ interface Relation {
 interface KnowledgeGraph {
   entities: Entity[];
   relations: Relation[];
+  // Add a property to store the FlexSearch index
+  index?: FlexSearch.Document<Entity, string[]>;
 }
 
 // The KnowledgeGraphManager class contains all operations to interact with the knowledge graph
 class KnowledgeGraphManager {
+  private flexSearchIndex: FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>;
+
+  constructor() {
+    this.flexSearchIndex = new FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>({ 
+      document: { 
+        id: 'name', 
+        index: ['name', 'entityType', 'observations'] 
+      }
+    });
+  }
+
   private async loadGraph(): Promise<KnowledgeGraph> {
     try {
       const data = await fs.readFile(MEMORY_FILE_PATH, "utf-8");
       const lines = data.split("\n").filter(line => line.trim() !== "");
-      return lines.reduce((graph: KnowledgeGraph, line) => {
+      const graph: KnowledgeGraph = lines.reduce((g: KnowledgeGraph, line) => {
         const item = JSON.parse(line);
-        if (item.type === "entity") graph.entities.push(item as Entity);
-        if (item.type === "relation") graph.relations.push(item as Relation);
-        return graph;
+        if (item.type === "entity") g.entities.push(item as Entity);
+        if (item.type === "relation") g.relations.push(item as Relation);
+        return g;
       }, { entities: [], relations: [] });
+
+      // Rebuild FlexSearch index on load
+      this.flexSearchIndex = new FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>({ 
+        document: { 
+          id: 'name', 
+          index: ['name', 'entityType', 'observations'] 
+        }
+      });
+      graph.entities.forEach(entity => this.flexSearchIndex.add(entity));
+
+      return graph;
     } catch (error) {
       if (error instanceof Error && 'code' in error && (error as any).code === "ENOENT") {
         return { entities: [], relations: [] };
@@ -70,6 +95,7 @@ class KnowledgeGraphManager {
     const graph = await this.loadGraph();
     const newEntities = entities.filter(e => !graph.entities.some(existingEntity => existingEntity.name === e.name));
     graph.entities.push(...newEntities);
+    newEntities.forEach(entity => this.flexSearchIndex.add(entity)); // Add to index
     await this.saveGraph(graph);
     return newEntities;
   }
@@ -95,6 +121,7 @@ class KnowledgeGraphManager {
       }
       const newObservations = o.contents.filter(content => !entity.observations.includes(content));
       entity.observations.push(...newObservations);
+      this.flexSearchIndex.update(entity); // Update index for modified entity
       return { entityName: o.entityName, addedObservations: newObservations };
     });
     await this.saveGraph(graph);
@@ -103,6 +130,7 @@ class KnowledgeGraphManager {
 
   async deleteEntities(entityNames: string[]): Promise<void> {
     const graph = await this.loadGraph();
+    entityNames.forEach(name => this.flexSearchIndex.remove(name)); // Remove from index
     graph.entities = graph.entities.filter(e => !entityNames.includes(e.name));
     graph.relations = graph.relations.filter(r => !entityNames.includes(r.from) && !entityNames.includes(r.to));
     await this.saveGraph(graph);
@@ -114,6 +142,7 @@ class KnowledgeGraphManager {
       const entity = graph.entities.find(e => e.name === d.entityName);
       if (entity) {
         entity.observations = entity.observations.filter(o => !d.observations.includes(o));
+        this.flexSearchIndex.update(entity); // Update index for modified entity
       }
     });
     await this.saveGraph(graph);
@@ -133,19 +162,27 @@ class KnowledgeGraphManager {
     return this.loadGraph();
   }
 
-  // Very basic search function
   async searchNodes(query: string): Promise<KnowledgeGraph> {
     const graph = await this.loadGraph();
     
-    // Filter entities
-    const filteredEntities = graph.entities.filter(e => 
-      e.name.toLowerCase().includes(query.toLowerCase()) ||
-      e.entityType.toLowerCase().includes(query.toLowerCase()) ||
-      e.observations.some(o => o.toLowerCase().includes(query.toLowerCase()))
-    );
-  
-    // Create a Set of filtered entity names for quick lookup
-    const filteredEntityNames = new Set(filteredEntities.map(e => e.name));
+    // Use FlexSearch to find matching entity names
+    const searchResults = this.flexSearchIndex.search(query, { 
+      enrich: true, // Return the full document
+      suggest: true // Include suggestions
+    });
+
+    // Extract unique entity names from search results
+    const filteredEntityNames = new Set<string>();
+    searchResults.forEach(result => {
+      result.result.forEach(item => {
+        if (item.doc && item.doc.name) {
+          filteredEntityNames.add(item.doc.name);
+        }
+      });
+    });
+
+    // Filter entities based on search results
+    const filteredEntities = graph.entities.filter(e => filteredEntityNames.has(e.name));
   
     // Filter relations to only include those between filtered entities
     const filteredRelations = graph.relations.filter(r => 
