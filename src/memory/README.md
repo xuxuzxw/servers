@@ -2,16 +2,6 @@
 
 A basic implementation of persistent memory using a local knowledge graph. This lets Claude remember information about the user across chats.
 
-## Search Functionality Optimization
-
-The search functionality has been optimized by integrating `flexsearch.js`. This enhancement provides:
-
-*   **Full-text search**: More comprehensive search capabilities across entity names, types, and observations.
-*   **Fuzzy matching**: Improved search results even with partial or slightly inaccurate queries.
-*   **Enhanced query logic**: The `searchNodes` method now leverages `flexsearch` for more efficient and accurate retrieval of relevant entities and their associated relations.
-
-The `KnowledgeGraphManager` now includes a `flexSearchIndex` to manage the search index, which is updated automatically during entity creation, observation addition, and entity deletion operations.
-
 ## Core Concepts
 
 ### Entities

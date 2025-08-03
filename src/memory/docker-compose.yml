@@ -1,0 +1,16 @@
+services:
+  memory-server:
+    build: .
+    image: memory-server:latest
+    container_name: memory-server
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./docker-data:/app/data
+    environment:
+      - MEMORY_FILE_PATH=/app/data/memory.json
+      - NODE_ENV=production
+    restart: unless-stopped
+    # 如果需要网络访问，可以取消注释以下端口映射
+    # ports:
+    #   - "3000:3000"

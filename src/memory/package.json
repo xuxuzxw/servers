@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.0.1",
+    "@types/flexsearch": "^0.7.6",
     "flexsearch": "^0.8.205"
   },
   "devDependencies": {

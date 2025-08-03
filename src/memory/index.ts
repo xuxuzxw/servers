@@ -9,7 +9,7 @@ import {
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import FlexSearch from 'flexsearch';
+import { Index } from 'flexsearch';
 
 // Define memory file path using environment variable with fallback
 const defaultMemoryPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'memory.json');
@@ -37,47 +37,76 @@ interface Relation {
 interface KnowledgeGraph {
   entities: Entity[];
   relations: Relation[];
-  // Add a property to store the FlexSearch index
-  index?: FlexSearch.Document<Entity, string[]>;
 }
 
 // The KnowledgeGraphManager class contains all operations to interact with the knowledge graph
 class KnowledgeGraphManager {
-  private flexSearchIndex: FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>;
-
+  private entityIndex: Index;
+  private observationIndex: Index;
+  
   constructor() {
-    this.flexSearchIndex = new FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>({ 
-      document: { 
-        id: 'name', 
-        index: ['name', 'entityType', 'observations'] 
-      }
+    // Initialize search indexes
+    this.entityIndex = new Index({
+      tokenize: "forward",
+      cache: true,
+      resolution: 9
+    });
+    
+    this.observationIndex = new Index({
+      tokenize: "forward", 
+      cache: true,
+      resolution: 9
     });
   }
-
+  
+  private async rebuildIndexes(graph: KnowledgeGraph): Promise<void> {
+    // Clear existing indexes
+    this.entityIndex = new Index({
+      tokenize: "forward",
+      cache: true,
+      resolution: 9
+    });
+    
+    this.observationIndex = new Index({
+      tokenize: "forward",
+      cache: true, 
+      resolution: 9
+    });
+    
+    // Rebuild entity index
+    graph.entities.forEach((entity, index) => {
+      const searchText = `${entity.name} ${entity.entityType}`;
+      this.entityIndex.add(index, searchText);
+    });
+    
+    // Rebuild observation index
+    graph.entities.forEach((entity, entityIndex) => {
+      entity.observations.forEach((observation, obsIndex) => {
+        const id = `${entityIndex}-${obsIndex}`;
+        this.observationIndex.add(id, observation);
+      });
+    });
+  }
+  
   private async loadGraph(): Promise<KnowledgeGraph> {
     try {
       const data = await fs.readFile(MEMORY_FILE_PATH, "utf-8");
       const lines = data.split("\n").filter(line => line.trim() !== "");
-      const graph: KnowledgeGraph = lines.reduce((g: KnowledgeGraph, line) => {
+      const graph = lines.reduce((graph: KnowledgeGraph, line) => {
         const item = JSON.parse(line);
-        if (item.type === "entity") g.entities.push(item as Entity);
-        if (item.type === "relation") g.relations.push(item as Relation);
-        return g;
+        if (item.type === "entity") graph.entities.push(item as Entity);
+        if (item.type === "relation") graph.relations.push(item as Relation);
+        return graph;
       }, { entities: [], relations: [] });
-
-      // Rebuild FlexSearch index on load
-      this.flexSearchIndex = new FlexSearch.Document<Entity, ['name', 'entityType', 'observations']>({ 
-        document: { 
-          id: 'name', 
-          index: ['name', 'entityType', 'observations'] 
-        }
-      });
-      graph.entities.forEach(entity => this.flexSearchIndex.add(entity));
-
+      
+      // Rebuild search indexes after loading
+      await this.rebuildIndexes(graph);
       return graph;
     } catch (error) {
       if (error instanceof Error && 'code' in error && (error as any).code === "ENOENT") {
-        return { entities: [], relations: [] };
+        const emptyGraph = { entities: [], relations: [] };
+        await this.rebuildIndexes(emptyGraph);
+        return emptyGraph;
       }
       throw error;
     }
@@ -89,13 +118,15 @@ class KnowledgeGraphManager {
       ...graph.relations.map(r => JSON.stringify({ type: "relation", ...r })),
     ];
     await fs.writeFile(MEMORY_FILE_PATH, lines.join("\n"));
+    
+    // Rebuild search indexes after saving
+    await this.rebuildIndexes(graph);
   }
 
   async createEntities(entities: Entity[]): Promise<Entity[]> {
     const graph = await this.loadGraph();
     const newEntities = entities.filter(e => !graph.entities.some(existingEntity => existingEntity.name === e.name));
     graph.entities.push(...newEntities);
-    newEntities.forEach(entity => this.flexSearchIndex.add(entity)); // Add to index
     await this.saveGraph(graph);
     return newEntities;
   }
@@ -121,7 +152,6 @@ class KnowledgeGraphManager {
       }
       const newObservations = o.contents.filter(content => !entity.observations.includes(content));
       entity.observations.push(...newObservations);
-      this.flexSearchIndex.update(entity); // Update index for modified entity
       return { entityName: o.entityName, addedObservations: newObservations };
     });
     await this.saveGraph(graph);
@@ -130,7 +160,6 @@ class KnowledgeGraphManager {
 
   async deleteEntities(entityNames: string[]): Promise<void> {
     const graph = await this.loadGraph();
-    entityNames.forEach(name => this.flexSearchIndex.remove(name)); // Remove from index
     graph.entities = graph.entities.filter(e => !entityNames.includes(e.name));
     graph.relations = graph.relations.filter(r => !entityNames.includes(r.from) && !entityNames.includes(r.to));
     await this.saveGraph(graph);
@@ -142,7 +171,6 @@ class KnowledgeGraphManager {
       const entity = graph.entities.find(e => e.name === d.entityName);
       if (entity) {
         entity.observations = entity.observations.filter(o => !d.observations.includes(o));
-        this.flexSearchIndex.update(entity); // Update index for modified entity
       }
     });
     await this.saveGraph(graph);
@@ -162,38 +190,54 @@ class KnowledgeGraphManager {
     return this.loadGraph();
   }
 
+  // Enhanced search function using FlexSearch
   async searchNodes(query: string): Promise<KnowledgeGraph> {
     const graph = await this.loadGraph();
     
-    // Use FlexSearch to find matching entity names
-    const searchResults = this.flexSearchIndex.search(query, { 
-      enrich: true, // Return the full document
-      suggest: true // Include suggestions
+    if (!query.trim()) {
+      return { entities: [], relations: [] };
+    }
+    
+    // Search in entity index (names and types)
+    const entityResults = this.entityIndex.search(query, { limit: 100 });
+    const matchedEntityIndexes = new Set(entityResults as number[]);
+    
+    // Search in observation index
+    const observationResults = this.observationIndex.search(query, { limit: 100 });
+    const matchedObservationEntityIndexes = new Set<number>();
+    
+    // Parse observation results to get entity indexes
+    (observationResults as string[]).forEach(id => {
+      const entityIndex = parseInt(id.split('-')[0]);
+      if (!isNaN(entityIndex)) {
+        matchedObservationEntityIndexes.add(entityIndex);
+      }
     });
-
-    // Extract unique entity names from search results
-    const filteredEntityNames = new Set<string>();
-    searchResults.forEach(result => {
-      result.result.forEach(item => {
-        if (item.doc && item.doc.name) {
-          filteredEntityNames.add(item.doc.name);
-        }
-      });
-    });
-
+    
+    // Combine all matched entity indexes
+    const allMatchedIndexes = new Set([
+      ...matchedEntityIndexes,
+      ...matchedObservationEntityIndexes
+    ]);
+    
     // Filter entities based on search results
-    const filteredEntities = graph.entities.filter(e => filteredEntityNames.has(e.name));
-  
+    const filteredEntities = graph.entities.filter((_, index) => 
+      allMatchedIndexes.has(index)
+    );
+    
+    // Create a Set of filtered entity names for quick lookup
+    const filteredEntityNames = new Set(filteredEntities.map(e => e.name));
+    
     // Filter relations to only include those between filtered entities
     const filteredRelations = graph.relations.filter(r => 
       filteredEntityNames.has(r.from) && filteredEntityNames.has(r.to)
     );
-  
+    
     const filteredGraph: KnowledgeGraph = {
       entities: filteredEntities,
       relations: filteredRelations,
     };
-  
+    
     return filteredGraph;
   }
 
