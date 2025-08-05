@@ -61,7 +61,6 @@ Example:
       - `entityType` (string): Type classification
       - `observations` (string[]): Associated observations
   - Ignores entities with existing names
-
 - **create_relations**
   - Create multiple new relations between entities
   - Input: `relations` (array of objects)
@@ -70,7 +69,6 @@ Example:
       - `to` (string): Target entity name
       - `relationType` (string): Relationship type in active voice
   - Skips duplicate relations
-
 - **add_observations**
   - Add new observations to existing entities
   - Input: `observations` (array of objects)
@@ -79,13 +77,11 @@ Example:
       - `contents` (string[]): New observations to add
   - Returns added observations per entity
   - Fails if entity doesn't exist
-
 - **delete_entities**
   - Remove entities and their relations
   - Input: `entityNames` (string[])
   - Cascading deletion of associated relations
   - Silent operation if entity doesn't exist
-
 - **delete_observations**
   - Remove specific observations from entities
   - Input: `deletions` (array of objects)
@@ -93,7 +89,6 @@ Example:
       - `entityName` (string): Target entity
       - `observations` (string[]): Observations to remove
   - Silent operation if observation doesn't exist
-
 - **delete_relations**
   - Remove specific relations from the graph
   - Input: `relations` (array of objects)
@@ -102,12 +97,10 @@ Example:
       - `to` (string): Target entity name
       - `relationType` (string): Relationship type
   - Silent operation if relation doesn't exist
-
 - **read_graph**
   - Read the entire knowledge graph
   - No input required
   - Returns complete graph structure with all entities and relations
-
 - **search_nodes**
   - Search for nodes based on query
   - Input: `query` (string)
@@ -116,7 +109,6 @@ Example:
     - Entity types
     - Observation content
   - Returns matching entities and their relations
-
 - **open_nodes**
   - Retrieve specific nodes by name
   - Input: `names` (string[])
@@ -124,6 +116,20 @@ Example:
     - Requested entities
     - Relations between requested entities
   - Silently skips non-existent nodes
+- **find_duplicates**
+  - Find duplicates across entities, relations, and observations
+  - Input: `entities` (optional array of objects), `relations` (optional array of objects), `observations` (optional array of objects)
+    - `entities`: Array of entities to check for duplicates
+      - Each object contains: `name`, `entityType`, `observations`
+    - `relations`: Array of relations to check for duplicates
+      - Each object contains: `from`, `to`, `relationType`
+    - `observations`: Array of observations to check for duplicates
+      - Each object contains: `entityName`, `contents` (array of strings)
+  - Returns:
+    - `duplicateEntities`: Array of entities that already exist in the graph
+    - `duplicateRelations`: Array of relations that already exist in the graph
+    - `duplicateObservations`: Array of objects containing `entityName` and `duplicateContents` (array of strings)
+  - All input parameters are optional; you can check duplicates for any combination of entity types 
 
 # Usage with Claude Desktop
 
